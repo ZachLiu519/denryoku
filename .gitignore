@@ -1,0 +1,21 @@
+# SwiftPM
+.build/
+.swiftpm/
+# Package.resolved is committed intentionally (this ships an executable, so we
+# want reproducible dependency versions).
+
+# Python
+__pycache__/
+*.pyc
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Local experiment scratch
+/tmp/
+*.log

@@ -1,0 +1,77 @@
+{
+  "profiles": [
+    {
+      "name": "eco",
+      "description": "Lowest practical power draw using supported macOS controls.",
+      "controls": {
+        "lowPowerMode": true,
+        "displaySleepMinutes": 2,
+        "systemSleepMinutes": 5,
+        "diskSleepMinutes": 10,
+        "processPolicy": "background-heavy-work"
+      },
+      "targets": {
+        "cpuPeak": "best-effort-low",
+        "gpuPeak": "best-effort-low",
+        "fanNoise": "minimize",
+        "transparency": "always-report-measured-state"
+      },
+      "experimental": false
+    },
+    {
+      "name": "balanced",
+      "description": "Default macOS behavior with transparent telemetry.",
+      "controls": {
+        "lowPowerMode": false,
+        "displaySleepMinutes": 10,
+        "systemSleepMinutes": 10,
+        "diskSleepMinutes": 10,
+        "processPolicy": "default"
+      },
+      "targets": {
+        "cpuPeak": "macos-default",
+        "gpuPeak": "macos-default",
+        "fanNoise": "automatic",
+        "transparency": "always-report-measured-state"
+      },
+      "experimental": false
+    },
+    {
+      "name": "burst",
+      "description": "Restore normal QoS and disable Low Power Mode for foreground-heavy work.",
+      "controls": {
+        "lowPowerMode": false,
+        "displaySleepMinutes": 20,
+        "systemSleepMinutes": 0,
+        "diskSleepMinutes": 10,
+        "processPolicy": "restore-user-work"
+      },
+      "targets": {
+        "cpuPeak": "allow-peak",
+        "gpuPeak": "allow-peak",
+        "fanNoise": "allow-thermal-policy",
+        "transparency": "always-report-measured-state"
+      },
+      "experimental": false
+    },
+    {
+      "name": "custom",
+      "description": "User-editable tier that maps desired CPU/GPU behavior to the best available backend.",
+      "controls": {
+        "lowPowerMode": true,
+        "displaySleepMinutes": 5,
+        "systemSleepMinutes": 10,
+        "diskSleepMinutes": 10,
+        "processPolicy": "manual"
+      },
+      "targets": {
+        "cpuPeak": "user-defined",
+        "gpuPeak": "user-defined",
+        "fanNoise": "user-defined",
+        "transparency": "requested-versus-measured"
+      },
+      "experimental": true
+    }
+  ]
+}
+
