@@ -55,10 +55,18 @@ See [`Formula/denryoku.rb`](Formula/denryoku.rb).
 # Inspect chip, OS, and the current tier (read-only, no sudo)
 denryoku status
 
-# Set a tier — sticky until you change it or reboot (needs sudo)
+# Set a tier — saved as your desired tier (needs sudo)
 sudo denryoku set 8            # 8 W budget
 sudo denryoku set --tier quiet # named tier
 sudo denryoku set 6.5          # fractional watts work
+
+# Reapply the saved tier after sleep/wake if CLPC stops enforcing it
+sudo denryoku reapply
+
+# Install a root wake daemon that reapplies the saved tier after wake.
+# The installer copies denryoku to a root-owned privileged helper path.
+sudo denryoku install-daemon
+sudo denryoku uninstall-daemon
 
 # Hand control back to macOS (full turbo)
 sudo denryoku off
@@ -108,7 +116,7 @@ desktop-only and skips several generations).
 
 ## Safety
 
-- **Reversible by design.** Tiers are sticky but a reboot clears everything, and
+- **Reversible by design.** `set` saves your desired tier for wake reapply, and
   `off` restores the macOS default immediately.
 - **Write allow-list.** The library refuses to write keys that could change core
   topology (core masks, cluster counts); only power/limit/target setpoints are
@@ -116,9 +124,15 @@ desktop-only and skips several generations).
 - **Read-back verification.** Every set re-reads the value and warns if the
   controller didn't honor it.
 - **macOS also drives this setpoint.** `` `pkg-avg-therm-power-target `` is part
-  of a *closed-loop* controller, so under sustained thermal load the OS may move
-  or reclaim your value. Re-run `status` to check; a value you didn't set means
-  the OS is managing it.
+  of a *closed-loop* controller. After sleep/wake, the IORegistry value can still
+  show your saved target even when AppleCLPC is no longer enforcing it. Run
+  `sudo denryoku reapply`, or install the wake daemon, if observed package power
+  rises above the configured budget.
+- **Wake daemon is explicit.** `install-daemon` writes
+  `/Library/LaunchDaemons/com.zachliu.denryoku.wake.plist`, copies the current
+  executable to `/Library/PrivilegedHelperTools/denryoku`, and logs to
+  `/var/log/denryoku-wake.log`. It requires a saved desired tier, so run
+  `sudo denryoku set <watts>` first.
 - Audit logs for `pmset` profile changes: `~/.local/state/denryoku/audit.jsonl`.
 
 ## License

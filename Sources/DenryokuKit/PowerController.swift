@@ -72,6 +72,17 @@ public final class PowerController {
         return try writeTherm(raw: FixedPoint.rawFromWatts(watts))
     }
 
+    /// Set the therm power budget from a persisted raw Q24 value.
+    public func setThermRaw(_ raw: Int) throws -> SetResult {
+        if !FixedPoint.isDisabled(raw) {
+            let watts = FixedPoint.wattsFromRaw(raw)
+            guard watts >= Self.minWatts, watts <= Self.maxWatts else {
+                throw ControllerError.wattsOutOfRange(watts, Self.minWatts, Self.maxWatts)
+            }
+        }
+        return try writeTherm(raw: raw)
+    }
+
     /// Disable the therm budget (full turbo).
     public func disableTherm() throws -> SetResult {
         try writeTherm(raw: FixedPoint.disabledSentinel)

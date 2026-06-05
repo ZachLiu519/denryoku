@@ -11,15 +11,16 @@ struct DenryokuCLI: ParsableCommand {
         discussion: """
         The headline feature is a proportional CPU power dial driven by the
         `pkg-avg-therm-power-target setpoint: unlike Low Power Mode's hard clamp,
-        it scales P-core frequency smoothly with a watt budget. Settings are
-        sticky until changed or reboot.
+        it scales P-core frequency smoothly with a watt budget. Settings are saved
+        as your desired tier and can be reapplied after sleep/wake.
 
         Tiers and watt->frequency hints are calibrated on an M5 laptop; run
         `capability` (and submit it!) to help map other chips.
         """,
         version: denryokuVersion,
         subcommands: [Status.self, Set.self, Off.self, Tiers.self, Capability.self,
-                      Doctor.self, Apply.self, Profiles.self, Revert.self, Watch.self],
+                      Doctor.self, Apply.self, Profiles.self, Revert.self, Watch.self,
+                      Reapply.self, InstallDaemon.self, UninstallDaemon.self, Daemon.self],
         defaultSubcommand: Status.self
     )
 }
@@ -34,13 +35,47 @@ private func printSetResult(_ r: SetResult) {
     }
 }
 
+private func saveDesiredTier(raw: Int, label: String) throws {
+    try DesiredTierStore.save(DesiredTierStore.makeState(raw: raw, label: label))
+}
+
 private func requireWritable() throws {
     guard PowerController.isSupported else {
         throw ValidationError("AppleCLPC not found — this needs an Apple Silicon Mac.")
     }
-    if !isRoot && !Shell.sudoReady {
+    if !isRoot {
         throw ValidationError("Changing the tier needs root. Re-run with sudo (e.g. `sudo denryoku ...`).")
     }
+}
+
+private func installPrivilegedHelper(from executable: String) throws {
+    let fm = FileManager.default
+    let source = URL(fileURLWithPath: executable).standardizedFileURL
+    let destination = URL(fileURLWithPath: WakeDaemon.helperPath).standardizedFileURL
+    guard fm.fileExists(atPath: source.path) else {
+        throw ValidationError("Could not find denryoku executable at \(source.path).")
+    }
+
+    let helperDirectory = destination.deletingLastPathComponent()
+    try fm.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
+    try fm.setAttributes([
+        .posixPermissions: 0o755,
+        .ownerAccountID: 0,
+        .groupOwnerAccountID: 0
+    ], ofItemAtPath: helperDirectory.path)
+    if source.path != destination.path {
+        let temporary = destination.deletingPathExtension()
+            .appendingPathExtension("tmp.\(ProcessInfo.processInfo.processIdentifier)")
+        try? fm.removeItem(at: temporary)
+        try fm.copyItem(at: source, to: temporary)
+        try? fm.removeItem(at: destination)
+        try fm.moveItem(at: temporary, to: destination)
+    }
+    try fm.setAttributes([
+        .posixPermissions: 0o755,
+        .ownerAccountID: 0,
+        .groupOwnerAccountID: 0
+    ], ofItemAtPath: destination.path)
 }
 
 // MARK: - status
@@ -70,6 +105,10 @@ struct Status: ParsableCommand {
         if let low = try? controller.currentLowPowerRaw() {
             print("  low-power target: \(low)  [\(FixedPoint.describe(low))]")
         }
+        if let saved = try? DesiredTierStore.load() {
+            print("  saved desired:    \(saved.raw)  [\(saved.label)]")
+            print("  saved at:         \(saved.updatedAt)")
+        }
     }
 }
 
@@ -77,7 +116,7 @@ struct Status: ParsableCommand {
 
 struct Set: ParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Set the CPU power tier (sticky until changed or reboot).",
+        abstract: "Set and save the desired CPU power tier.",
         discussion: "Provide a watt budget (e.g. `set 8`) or a named tier (`set --tier balanced`)."
     )
 
@@ -107,8 +146,9 @@ struct Set: ParsableCommand {
             result = try controller.setThermWatts(watts!)
             print("Set CPU budget to \(watts!) W:")
         }
+        try saveDesiredTier(raw: result.requestedRaw, label: FixedPoint.describe(result.requestedRaw))
         printSetResult(result)
-        print("\nSticky until changed or reboot. Revert with: denryoku off")
+        print("\nSaved as desired tier for wake reapply. Revert with: denryoku off")
     }
 }
 
@@ -122,6 +162,7 @@ struct Off: ParsableCommand {
         let controller = try PowerController()
         let result = try controller.disableTherm()
         print("Disabled CPU budget (full turbo):")
+        try saveDesiredTier(raw: result.requestedRaw, label: "off")
         printSetResult(result)
     }
 }
@@ -156,7 +197,7 @@ struct Capability: ParsableCommand {
     var writeTest = false
 
     func run() throws {
-        if writeTest && !isRoot && !Shell.sudoReady {
+        if writeTest && !isRoot {
             throw ValidationError("--write-test needs root. Re-run with sudo.")
         }
         let report = CapabilityReport.generate(runWriteTest: writeTest)
@@ -258,6 +299,81 @@ struct Watch: ParsableCommand {
             fflush(stdout)
             Thread.sleep(forTimeInterval: interval)
         }
+    }
+}
+
+// MARK: - wake reapply daemon
+
+struct Reapply: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Force-reapply the saved CPU tier.")
+
+    func run() throws {
+        try requireWritable()
+        let result = try WakeDaemon.reapplySavedTarget()
+        print("Reapplied saved CPU tier:")
+        printSetResult(result)
+    }
+}
+
+struct InstallDaemon: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Install the root wake daemon that reapplies the saved CPU tier after sleep.")
+
+    func run() throws {
+        guard isRoot else {
+            throw ValidationError("Installing the wake daemon needs root. Re-run with sudo.")
+        }
+        guard try DesiredTierStore.load() != nil else {
+            throw ValidationError("No saved CPU tier found. Run `sudo denryoku set <watts>` before installing the wake daemon.")
+        }
+        let executable = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+        try installPrivilegedHelper(from: executable)
+        let plistData = WakeDaemon.plistData(executablePath: WakeDaemon.helperPath)
+        let url = URL(fileURLWithPath: WakeDaemon.plistPath)
+        try plistData.write(to: url, options: [.atomic])
+        try FileManager.default.setAttributes([
+            .posixPermissions: 0o644,
+            .ownerAccountID: 0,
+            .groupOwnerAccountID: 0
+        ], ofItemAtPath: url.path)
+
+        _ = Shell.run("/bin/launchctl", ["bootout", "system/\(WakeDaemon.label)"])
+        let bootstrap = Shell.run("/bin/launchctl", ["bootstrap", "system", WakeDaemon.plistPath])
+        guard bootstrap.ok else {
+            throw ValidationError("launchctl bootstrap failed: \(bootstrap.stderr.isEmpty ? bootstrap.stdout : bootstrap.stderr)")
+        }
+        let kickstart = Shell.run("/bin/launchctl", ["kickstart", "-k", "system/\(WakeDaemon.label)"])
+        guard kickstart.ok else {
+            throw ValidationError("launchctl kickstart failed: \(kickstart.stderr.isEmpty ? kickstart.stdout : kickstart.stderr)")
+        }
+        print("Installed wake daemon: \(WakeDaemon.label)")
+        print("Saved tier file: \(DesiredTierStore.defaultURL.path)")
+    }
+}
+
+struct UninstallDaemon: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Uninstall the root wake daemon.")
+
+    func run() throws {
+        guard isRoot else {
+            throw ValidationError("Uninstalling the wake daemon needs root. Re-run with sudo.")
+        }
+        _ = Shell.run("/bin/launchctl", ["bootout", "system/\(WakeDaemon.label)"])
+        try? FileManager.default.removeItem(atPath: WakeDaemon.plistPath)
+        print("Uninstalled wake daemon: \(WakeDaemon.label)")
+    }
+}
+
+struct Daemon: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Run the denryoku wake daemon.",
+        shouldDisplay: false
+    )
+
+    func run() throws {
+        guard isRoot else {
+            throw ValidationError("The wake daemon must run as root.")
+        }
+        try WakeDaemonRunner().run()
     }
 }
 

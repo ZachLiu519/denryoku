@@ -30,6 +30,27 @@ func runSelfTest() -> Int {
     check(!CLPC.isSafeToWrite("#cpu-core-mask"), "core-mask blocked")
     check(!CLPC.isSafeToWrite("#cpu-num-clusters"), "num-clusters blocked")
 
+    print("Desired tier persistence:")
+    let saved = DesiredTierState(raw: FixedPoint.rawFromWatts(9), label: "9.00 W", updatedAt: "2026-06-05T00:00:00Z")
+    let encoded = try! JSONEncoder().encode(saved)
+    let decoded = try! JSONDecoder().decode(DesiredTierState.self, from: encoded)
+    check(decoded.raw == FixedPoint.rawFromWatts(9), "saved state preserves raw target")
+    check(decoded.label == "9.00 W", "saved state preserves label")
+    check(decoded.isDisabled == false, "positive saved state is enabled")
+    check(DesiredTierState(raw: FixedPoint.disabledSentinel, label: "off", updatedAt: "now").isDisabled, "sentinel saved state is disabled")
+
+    print("LaunchDaemon plist:")
+    let plist = WakeDaemon.plist(executablePath: "/usr/local/bin/denryoku & helper")
+    check(plist.contains("<string>/usr/local/bin/denryoku &amp; helper</string>"), "plist XML-escapes executable")
+    check(plist.contains("<string>daemon</string>"), "plist starts daemon command")
+    check(plist.contains("<key>KeepAlive</key>"), "plist keeps wake daemon alive")
+    let plistData = WakeDaemon.plistData(executablePath: "/usr/local/bin/denryoku")
+    let parsed = try! PropertyListSerialization.propertyList(from: plistData, format: nil) as! [String: Any]
+    check(parsed["Label"] as? String == WakeDaemon.label, "plist has daemon label")
+    check((parsed["ProgramArguments"] as? [String]) == ["/usr/local/bin/denryoku", "daemon"], "plist has daemon arguments")
+    check(WakeDaemon.helperPath == "/Library/PrivilegedHelperTools/denryoku", "daemon uses privileged helper path")
+    check(WakeDaemon.retryDelays == [2, 5, 15, 30], "daemon retry delays are bounded")
+
     print(failures == 0 ? "\nALL PASS" : "\n\(failures) FAILURE(S)")
     return failures
 }
